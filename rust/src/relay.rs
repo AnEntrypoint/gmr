@@ -502,9 +502,7 @@ pub async fn serve(args: Vec<String>) -> i32 {
     tokio::spawn(read_lines(tokio::io::stdin(), host_tx, |line| line));
     let (events_tx, mut events) = mpsc::channel::<WorkerEvent>(LINES_QUEUED);
 
-    if let Some(checkout) = update::checkout_of(&exe) {
-        tokio::spawn(update::run(checkout));
-    }
+    update::start(&exe);
 
     let memory_limit_mb = std::env::var("GMNEW_MEMORY_LIMIT_MB").ok().and_then(|v| v.parse().ok()).unwrap_or(512);
     let mut relay = Relay {

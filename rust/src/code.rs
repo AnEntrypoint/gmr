@@ -387,12 +387,14 @@ fn analyse(rel: &str, text: &str, sig: Sig) -> FileEntry {
     scan_lines(rel, text, sig)
 }
 
+#[cfg(feature = "jit")]
 pub struct Parsed {
     pub defs: Vec<String>,
     pub calls: Vec<(String, u32, bool)>,
     pub specs: Vec<String>,
 }
 
+#[cfg(feature = "jit")]
 pub fn file_defs_and_calls(rel: &str, text: &str) -> Option<Parsed> {
     let entry = analyse(rel, text, (0, 0));
     if entry.approximate {

@@ -1,0 +1,97 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-13
+            target: x86_64-apple-darwin
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+          key: ${{ matrix.target }}
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          asset=gmnew-${{ matrix.target }}
+          cp "rust/target/${{ matrix.target }}/release/gmnew" "$asset"
+          shasum -a 256 "$asset" > "$asset.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $asset = "gmnew-${{ matrix.target }}.exe"
+          Copy-Item "rust/target/${{ matrix.target }}/release/gmnew.exe" $asset
+          $hash = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
+          Set-Content -Encoding ascii -Path "$asset.sha256" -Value "$hash  $asset"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gmnew-${{ matrix.target }}
+          path: gmnew-${{ matrix.target }}*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Move the latest tag
+        run: |
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin refs/tags/latest
+
+      - name: Publish the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          subject=$(git log -1 --format=%s "$GITHUB_SHA")
+          notes="Rolling build of commit $GITHUB_SHA: $subject"
+          if gh release view latest > /dev/null 2>&1; then
+            gh release upload latest dist/* --clobber
+            gh release edit latest --latest --notes "$notes"
+          else
+            gh release create latest dist/* --latest --title latest --notes "$notes" --target "$GITHUB_SHA"
+          fi

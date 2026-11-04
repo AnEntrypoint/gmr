@@ -137,6 +137,7 @@ impl Jobs {
         self.epoch.elapsed().as_secs_f64() * 1000.0
     }
 
+    #[cfg(feature = "jit")]
     pub(crate) fn list(&self) -> Vec<Value> {
         lock(&self.table)
             .values()
@@ -144,6 +145,7 @@ impl Jobs {
             .collect()
     }
 
+    #[cfg(feature = "jit")]
     pub(crate) async fn status(&self, name: &str, wait_ms: u64, offset: Option<u64>) -> Option<Value> {
         if wait_ms > 0 {
             if let Some(job) = self.lookup(name) {
