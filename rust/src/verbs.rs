@@ -5,39 +5,6 @@ use serde_json::{json, Value};
 use crate::mcp_client::Hub;
 use crate::types::{Ctx, VerbDef};
 
-#[cfg(feature = "jit")]
-#[path = "jit.rs"]
-pub mod jit;
-
-#[cfg(feature = "jit")]
-#[path = "native.rs"]
-pub mod native;
-
-#[cfg(not(feature = "jit"))]
-pub mod jit {
-    use std::sync::Arc;
-
-    use serde_json::Value;
-
-    use crate::types::Ctx;
-
-    pub fn listing() -> Vec<Value> {
-        Vec::new()
-    }
-
-    pub async fn call_verb(_gm: Arc<Ctx>, _name: &str, _args: Value) -> Option<Value> {
-        None
-    }
-
-    pub async fn serves_kernel(_function: &str) -> bool {
-        false
-    }
-
-    pub async fn kernel(_gm: Arc<Ctx>, _function: &'static str, _args: Value) -> Option<Value> {
-        None
-    }
-}
-
 pub const READ_ONLY: &[&str] = &[
     "next_context",
     "read_file",
@@ -98,14 +65,6 @@ pub fn catalog(hub: &Hub) -> Vec<Value> {
         .into_iter()
         .map(|verb| json!({ "name": verb.name, "description": verb.description, "inputSchema": schema_of(verb) }))
         .collect();
-    for entry in jit::listing() {
-        let Some(name) = entry.get("name").and_then(Value::as_str) else { continue };
-        let shown = json!({ "name": name, "description": entry["description"], "inputSchema": entry["inputSchema"] });
-        match list.iter_mut().find(|verb| verb["name"] == name) {
-            Some(slot) => *slot = shown,
-            None => list.push(shown),
-        }
-    }
     for tool in hub.tools() {
         let name = hub_name(&tool.server, &tool.tool);
         if list.iter().all(|verb| verb["name"] != name.as_str()) {
@@ -124,9 +83,6 @@ pub fn names(hub: &Hub) -> Vec<String> {
 
 pub async fn call(ctx: Arc<Ctx>, name: &str, args: Value) -> Value {
     let args = if args.is_null() { json!({}) } else { args };
-    if let Some(reply) = jit::call_verb(ctx.clone(), name, args.clone()).await {
-        return reply;
-    }
     let outcome = match lookup(name) {
         Some(verb) => (verb.call)(ctx, args).await,
         None => {

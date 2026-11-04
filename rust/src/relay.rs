@@ -572,7 +572,6 @@ pub async fn serve(args: Vec<String>) -> i32 {
     }
 
     relay.stop_worker().await;
-    update::stop_children();
     drop(relay);
     let _ = tokio::time::timeout(EXIT_WAIT, writer).await;
     0

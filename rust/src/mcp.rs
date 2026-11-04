@@ -718,9 +718,6 @@ impl Server {
         let running = crate::runcode::background_running() + ctx.jobs.running();
         let stop_ctx = ctx.clone();
         let work = async move {
-            if let Some(reply) = kernel_finish(&stop_ctx, &finish_args, running).await {
-                return reply;
-            }
             let stop = move || {
                 crate::runcode::stop_all(&stop_ctx, "stopBackground");
                 stop_ctx.jobs.kill_all();
@@ -796,84 +793,7 @@ impl Server {
     }
 }
 
-fn kernel_feed_args(run: &Run, args: &Value, background_running: usize) -> Result<Value, Value> {
-    let refuse = |text: String| json!({ "ok": false, "refused": true, "error": format!("refused: {text}") });
-    if run.ended().is_some() {
-        return Err(refuse(run.ended_reason(false)));
-    }
-    let mut fields = args.as_object().cloned().unwrap_or_default();
-    fields.insert("maxSteps".into(), json!(run.max_steps()));
-    fields.insert("toolsText".into(), json!(run.tools_text()));
-    fields.insert("waitCommand".into(), json!(crate::feed::wait_command(run)));
-    fields.insert("backgroundRunning".into(), json!(background_running));
-    if args.get("child") == Some(&Value::Bool(true)) {
-        fields.insert("step".into(), json!(run.step()));
-        return Ok(Value::Object(fields));
-    }
-    let step = match run.begin_step() {
-        Ok(step) => step,
-        Err(text) => {
-            run.end_run("max_steps", None, None);
-            return Err(refuse(text));
-        }
-    };
-    fields.insert("step".into(), json!(step));
-    run.clear_delivered();
-    match crate::log::take_pending(&run.dir) {
-        Ok(taken) => {
-            let records: Vec<Value> = taken.records.iter().filter_map(|r| serde_json::from_str(r).ok()).collect();
-            fields.insert("pending".into(), Value::Array(records));
-            run.set_delivered(taken.files);
-        }
-        Err(e) => {
-            fields.insert("pendingError".into(), json!(e.to_string()));
-        }
-    }
-    Ok(Value::Object(fields))
-}
-
-async fn kernel_feed(ctx: &Arc<Ctx>, args: &Value) -> Option<Value> {
-    if !crate::verbs::jit::serves_kernel("nextContext").await {
-        return None;
-    }
-    let run = ctx.run.clone();
-    let given = args.clone();
-    let running = crate::runcode::background_running() + ctx.jobs.running();
-    let prepared = tokio::task::spawn_blocking(move || kernel_feed_args(&run, &given, running)).await.ok()?;
-    match prepared {
-        Ok(kernel_args) => crate::verbs::jit::kernel(ctx.clone(), "nextContext", kernel_args).await,
-        Err(refusal) => Some(refusal),
-    }
-}
-
-async fn kernel_finish(ctx: &Arc<Ctx>, args: &Value, running: usize) -> Option<Value> {
-    if !crate::verbs::jit::serves_kernel("finish").await {
-        return None;
-    }
-    let mut fields = args.as_object().cloned().unwrap_or_default();
-    fields.insert("backgroundRunning".into(), json!(running));
-    fields.insert("step".into(), json!(ctx.run.step()));
-    let mut reply = crate::verbs::jit::kernel(ctx.clone(), "finish", Value::Object(fields)).await?;
-    let end = reply.as_object_mut().and_then(|o| o.remove("end"));
-    if let (true, Some(end)) = (is_ok(&reply), end) {
-        if args.get("stopBackground") == Some(&Value::Bool(true)) {
-            crate::runcode::stop_all(ctx, "stopBackground");
-            ctx.jobs.kill_all();
-        }
-        let lint = crate::search::lint_wiki(&ctx.workspace);
-        if !lint.skipped {
-            ctx.run.event("lint", json!({ "problems": lint.problems, "pages": lint.pages }));
-        }
-        let gaps = end.get("gaps").filter(|g| !g.is_null()).cloned();
-        ctx.run.end_run("finished", end.get("witness").and_then(Value::as_str), gaps);
-    }
-    Some(reply)
-}
-
 async fn feed_call(ctx: Arc<Ctx>, args: Value) -> Value {
-    if let Some(reply) = kernel_feed(&ctx, &args).await {
-        return reply;
-    }
     let run = ctx.run.clone();
     tokio::task::spawn_blocking(move || crate::feed::next_context(&run, &args))
         .await

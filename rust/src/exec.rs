@@ -137,27 +137,6 @@ impl Jobs {
         self.epoch.elapsed().as_secs_f64() * 1000.0
     }
 
-    #[cfg(feature = "jit")]
-    pub(crate) fn list(&self) -> Vec<Value> {
-        lock(&self.table)
-            .values()
-            .map(|job| json!({ "job": job.name, "state": job.state(), "pid": job.pid, "startMono": job.start_mono }))
-            .collect()
-    }
-
-    #[cfg(feature = "jit")]
-    pub(crate) async fn status(&self, name: &str, wait_ms: u64, offset: Option<u64>) -> Option<Value> {
-        if wait_ms > 0 {
-            if let Some(job) = self.lookup(name) {
-                if !job.is_settled() {
-                    let mut settled = job.settled.subscribe();
-                    let _ = tokio::time::timeout(Duration::from_millis(wait_ms.min(MAX_WAIT_MS)), settled.wait_for(|done| *done)).await;
-                }
-            }
-        }
-        self.status_of(name).map(|status| job_reply(status, offset))
-    }
-
     pub(crate) fn start(
         &self,
         run: Arc<Run>,

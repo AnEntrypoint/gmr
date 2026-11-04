@@ -43,7 +43,7 @@ jobs:
 
       - name: Build
         working-directory: rust
-        run: cargo build --release --no-default-features --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Package (unix)
         if: runner.os != 'Windows'

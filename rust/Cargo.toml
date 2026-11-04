@@ -26,10 +26,6 @@ oxc_syntax = "0.157"
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
-[features]
-default = ["jit"]
-jit = []
-
 [profile.release]
 opt-level = 3
 debug = false

@@ -387,30 +387,6 @@ fn analyse(rel: &str, text: &str, sig: Sig) -> FileEntry {
     scan_lines(rel, text, sig)
 }
 
-#[cfg(feature = "jit")]
-pub struct Parsed {
-    pub defs: Vec<String>,
-    pub calls: Vec<(String, u32, bool)>,
-    pub specs: Vec<String>,
-}
-
-#[cfg(feature = "jit")]
-pub fn file_defs_and_calls(rel: &str, text: &str) -> Option<Parsed> {
-    let entry = analyse(rel, text, (0, 0));
-    if entry.approximate {
-        return None;
-    }
-    let mut defs: Vec<String> = entry.defs.into_iter().collect();
-    defs.sort();
-    let mut calls: Vec<(String, u32, bool)> = entry
-        .calls
-        .into_iter()
-        .flat_map(|(name, sites)| sites.into_iter().map(move |(line, member)| (name.clone(), line, member)))
-        .collect();
-    calls.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
-    Some(Parsed { defs, calls, specs: entry.specs })
-}
-
 fn parse<'a>(allocator: &'a Allocator, text: &'a str, source_type: SourceType) -> Option<Program<'a>> {
     let parsed = Parser::new(allocator, text, source_type).parse();
     if parsed.diagnostics.is_empty() {
