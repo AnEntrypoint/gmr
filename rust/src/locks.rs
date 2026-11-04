@@ -25,6 +25,10 @@ impl Locks {
         self.shell.write().await
     }
 
+    pub fn exclusive_blocking(&self) -> RwLockWriteGuard<'_, ()> {
+        self.shell.blocking_write()
+    }
+
     pub async fn path(&self, p: &Path) -> OwnedMutexGuard<()> {
         let key = canonical_key(p);
         let slot = {

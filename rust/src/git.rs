@@ -470,6 +470,17 @@ pub fn blocking(ctx: Arc<Ctx>, args: Value, run: fn(&Ctx, &Value) -> Value) -> F
     Box::pin(async move { tokio::task::spawn_blocking(move || run(&ctx, &args)).await.map_err(|err| err.to_string()) })
 }
 
+pub fn exclusive(ctx: Arc<Ctx>, args: Value, run: fn(&Ctx, &Value) -> Value) -> Fut<VerbOutcome> {
+    Box::pin(async move {
+        tokio::task::spawn_blocking(move || {
+            let _exclusive = ctx.locks.exclusive_blocking();
+            run(&ctx, &args)
+        })
+        .await
+        .map_err(|err| err.to_string())
+    })
+}
+
 pub const VERBS: &[VerbDef] = &[
     VerbDef {
         name: "git_status",
@@ -481,25 +492,25 @@ pub const VERBS: &[VerbDef] = &[
         name: "git_add",
         description: "Stage the given workspace paths. Each path is explicit; \".\" is refused. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}}},"required":["paths"]}"#,
-        call: |ctx, args| blocking(ctx, args, add),
+        call: |ctx, args| exclusive(ctx, args, add),
     },
     VerbDef {
         name: "git_rm",
         description: "Remove the given workspace paths from the disk and the index, with git rm, so the removal is staged. Each path is explicit; \".\" is refused. Commit it with git_commit, which runs the commit gate. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}}},"required":["paths"]}"#,
-        call: |ctx, args| blocking(ctx, args, rm),
+        call: |ctx, args| exclusive(ctx, args, rm),
     },
     VerbDef {
         name: "git_commit",
         description: "Commit only the given paths, with the message. Stage new files with git_add first. The commit gate runs first: ASCII of every tracked text file in the paths, every path that DESIGN.md names exists, and cargo check of rust/ when rust/ is committed. A failed check refuses the commit. gate reports each check with its time, and notCovered lists what the gate does not check. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"},"message":{"type":"string"},"paths":{"type":"array","items":{"type":"string"}}},"required":["message","paths"]}"#,
-        call: |ctx, args| blocking(ctx, args, commit),
+        call: |ctx, args| exclusive(ctx, args, commit),
     },
     VerbDef {
         name: "git_push",
         description: "Push main to origin and set its upstream. Refused unless the current branch is main. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"}},"required":[]}"#,
-        call: |ctx, args| blocking(ctx, args, push),
+        call: |ctx, args| exclusive(ctx, args, push),
     },
     VerbDef {
         name: "git_log",
@@ -523,19 +534,19 @@ pub const VERBS: &[VerbDef] = &[
         name: "git_fetch",
         description: "Fetch origin. The working tree is not changed. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"}},"required":[]}"#,
-        call: |ctx, args| blocking(ctx, args, fetch),
+        call: |ctx, args| exclusive(ctx, args, fetch),
     },
     VerbDef {
         name: "git_pull",
         description: "Fast-forward pull of the current branch from its upstream. Never merges. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"}},"required":[]}"#,
-        call: |ctx, args| blocking(ctx, args, pull),
+        call: |ctx, args| exclusive(ctx, args, pull),
     },
     VerbDef {
         name: "git_checkout",
         description: "Switch to an existing branch, tag or commit. Creates nothing. cwd, when given, is the directory whose repository the verb acts on: absolute, or relative to the workspace root; a directory outside a git repository is refused. Omitted, the workspace is used.",
         schema: r#"{"type":"object","properties":{"cwd":{"type":"string"},"ref":{"type":"string"}},"required":["ref"]}"#,
-        call: |ctx, args| blocking(ctx, args, checkout),
+        call: |ctx, args| exclusive(ctx, args, checkout),
     },
     VerbDef {
         name: "git_branch",
