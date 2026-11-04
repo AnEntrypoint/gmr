@@ -53,7 +53,7 @@ impl Hub {
         self.sink.attach(run);
     }
 
-    pub async fn start(&self, workspace: PathBuf, layers: Vec<PathBuf>) -> Vec<String> {
+    pub async fn start(&self, workspace: PathBuf, layers: Vec<(PathBuf, bool)>) {
         let mut problems = Vec::new();
         let specs = read_specs(&layers, &workspace, &mut problems);
         for problem in problems {
@@ -113,14 +113,8 @@ impl Hub {
                 });
             }
         }
-        let started: Vec<String> = runners
-            .iter()
-            .filter(|runner| runner.is_up())
-            .map(|runner| runner.spec.name.clone())
-            .collect();
         *self.runners.lock().unwrap() = runners;
         *self.tools.lock().unwrap() = tools;
-        started
     }
 
     pub fn tools(&self) -> Vec<HubTool> {
@@ -720,13 +714,13 @@ fn value_text(value: &Value) -> String {
     }
 }
 
-fn read_specs(layers: &[PathBuf], workspace: &Path, problems: &mut Vec<String>) -> Vec<Spec> {
+fn read_specs(layers: &[(PathBuf, bool)], workspace: &Path, problems: &mut Vec<String>) -> Vec<Spec> {
     let mut slots: Vec<(String, Option<Spec>)> = Vec::new();
-    for (index, file) in layers.iter().enumerate() {
+    for (file, required) in layers {
         let text = match fs::read_to_string(file) {
             Ok(text) => text,
             Err(err) if err.kind() == ErrorKind::NotFound => {
-                if index == 0 {
+                if *required {
                     problems.push(format!("{} does not exist", file.display()));
                 }
                 continue;

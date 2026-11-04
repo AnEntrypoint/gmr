@@ -270,14 +270,14 @@ fn trace_of(meta: &Value) -> Map<String, Value> {
     map
 }
 
-fn mcp_layers(workspace: &Path, extra: Option<&Path>) -> Vec<PathBuf> {
+fn mcp_layers(workspace: &Path, extra: Option<&Path>) -> Vec<(PathBuf, bool)> {
     let mut layers = Vec::new();
     if let Some(home) = skills::home() {
-        layers.push(home.join("defaults").join("mcp.json"));
+        layers.push((home.join("defaults").join("mcp.json"), true));
     }
-    layers.push(workspace.join(".gm-new").join("mcp.json"));
+    layers.push((workspace.join(".gm-new").join("mcp.json"), false));
     if let Some(file) = extra {
-        layers.push(std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf()));
+        layers.push((std::path::absolute(file).unwrap_or_else(|_| file.to_path_buf()), true));
     }
     layers
 }
@@ -776,7 +776,6 @@ impl Server {
     fn refuse(&self, ctx: &Arc<Ctx>, tool: &str, args: Value, reason: &str, rpc_id: &Value, trace: &Map<String, Value>) -> Value {
         let step = lock(&self.session).steps;
         let action = ctx.run.event("action", action_fields(step, tool, args, rpc_id, trace));
-        lock(&self.actions).insert(rpc_id.to_string(), action);
         let error = format!("refused: {reason}");
         ctx.run.event("refusal", json!({ "step": step, "tool": tool, "error": error, "durMs": 0, "actionSeq": action }));
         json!({ "ok": false, "refused": true, "error": error, "actionSeq": action })
@@ -1050,10 +1049,7 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
         let layers = mcp_layers(&workspace, opts.mcp_config.as_deref());
         let ws = workspace.clone();
         tokio::spawn(async move {
-            let problems = hub.start(ws, layers).await;
-            if !problems.is_empty() {
-                run.event("mcp-problems", json!({ "problems": problems }));
-            }
+            hub.start(ws, layers).await;
             log_tools(&run, &hub);
             let _ = ready_tx.send(true);
         });
