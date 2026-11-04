@@ -100,12 +100,13 @@ fn title_of(name: &str) -> String {
     }
 }
 
-fn annotated(name: &str, description: String, input_schema: Value) -> Value {
+fn annotated(name: &str, description: String, input_schema: Value, output_schema: Value) -> Value {
     let read_only = is_read_only(name) && name != "next_context";
     json!({
         "name": name,
         "description": description,
         "inputSchema": input_schema,
+        "outputSchema": output_schema,
         "title": title_of(name),
         "annotations": {
             "readOnlyHint": read_only,
@@ -123,21 +124,35 @@ pub fn served_tools(hub: &Hub) -> Vec<Value> {
     let text = json!({ "type": "string" });
     let number = json!({ "type": "number" });
     let boolean = json!({ "type": "boolean" });
+    let flag = json!({ "type": "boolean" });
+    let text_out = json!({ "type": "string" });
+    let number_out = json!({ "type": "number" });
     vec![
         annotated(
             "next_context",
             NEXT_CONTEXT_DESCRIPTION.to_string(),
             json!({ "type": "object", "properties": { "waitMs": number, "child": boolean, "run": text }, "required": [] }),
+            json!({
+                "type": "object",
+                "properties": { "ok": flag, "refused": flag, "error": text_out, "step": number_out, "run": text_out, "stepsLeft": number_out, "maxSteps": number_out, "total": number_out, "prefixSha": text_out, "actionSeq": number_out },
+                "required": ["ok"]
+            }),
         ),
         annotated(
             "finish",
             FINISH_DESCRIPTION.to_string(),
             json!({ "type": "object", "properties": { "witness": text, "gaps": { "type": "array", "items": text }, "stopBackground": boolean, "stopRows": boolean }, "required": ["witness"] }),
+            json!({ "type": "object", "properties": { "ok": flag, "refused": flag, "error": text_out, "finished": flag, "actionSeq": number_out }, "required": ["ok"] }),
         ),
         annotated(
             "run_code",
             format!("{RUN_CODE_HEAD}{}{RUN_CODE_TAIL}", verb_names(hub).join(", ")),
             json!({ "type": "object", "properties": { "body": text, "timeoutMs": number, "format": { "type": "string", "enum": ["esm", "cjs"] } }, "required": ["body"] }),
+            json!({
+                "type": "object",
+                "properties": { "ok": flag, "refused": flag, "error": text_out, "truncated": flag, "background": text_out, "state": text_out, "actionSeq": number_out },
+                "required": ["ok"]
+            }),
         ),
     ]
 }
@@ -485,7 +500,7 @@ impl Server {
             obj.insert("rulesNotice".into(), Value::String(notice));
         }
         let is_error = !is_ok(&out);
-        Ok(json!({ "content": [{ "type": "text", "text": out.to_string() }], "isError": is_error, "_meta": { RUN_META: run_id } }))
+        Ok(json!({ "content": [{ "type": "text", "text": out.to_string() }], "structuredContent": out, "isError": is_error, "_meta": { RUN_META: run_id } }))
     }
 
     fn progress_for(&self, name: &str, token: Option<&Value>) -> AbortOnDrop {
@@ -510,11 +525,11 @@ impl Server {
     }
 
     fn reopen(&self) -> Result<(), String> {
+        let old = self.ctx();
         let task = {
             let s = lock(&self.session);
-            s.ended_task.clone().or_else(|| self.task.clone())
+            s.ended_task.clone().or_else(|| self.task.clone()).or_else(|| Some(old.run.task()).filter(|t| !t.is_empty()))
         };
-        let old = self.ctx();
         let run = Arc::new(Run::open(&self.workspace, None, task.as_deref())?);
         old.jobs.set_dir(run.dir.clone());
         old.hub.attach(run.clone());

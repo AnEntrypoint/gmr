@@ -1,3 +1,5 @@
+import { errorType } from '../lib/retry.mjs';
+
 const DEFAULT_TIMEOUT_MS = 15000;
 const MAX_TIMEOUT_MS = 60000;
 const CHECK_TIMEOUT_MS = 15000;
@@ -12,21 +14,6 @@ const SHA_PATTERN = /^[0-9a-f]{7,40}$/;
 const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const ORIGIN_HINT = 'origin has no owner/name path; pass repo as owner/name';
 const ORIGIN_PATTERN = /^(?:[a-z][a-z0-9+.-]*:\/\/)?(?:[^@\/\s]+@)?([^\/:\s]+)(?::\d+)?[\/:]([^\/\s]+)\/([^\/\s]+?)(?:\.git)?\/?$/i;
-const TRANSIENT_CODE_NAMES = [
-  'ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'ETIMEDOUT', 'EAI_AGAIN',
-  'UND_ERR_SOCKET', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT', 'UND_ERR_BODY_TIMEOUT',
-];
-const TRANSIENT_TEXT = [
-  [/connection refused|econnrefused/i, 'ECONNREFUSED'],
-  [/failed to connect|error connecting to/i, 'connect'],
-  [/connection reset|econnreset|reset by peer|und_err_socket/i, 'ECONNRESET'],
-  [/timed out|timeout|etimedout|aborterror|aborted/i, 'ETIMEDOUT'],
-  [/hung up unexpectedly|remote end hung up|socket hang up/i, 'hung-up'],
-  [/temporary failure in name resolution/i, 'EAI_AGAIN'],
-];
-const STATUS_TEXT = /(?:HTTP|returned error:?|status code)\s*(408|429|5\d\d)\b/i;
-const URL_TEXT = /[a-z][a-z0-9+.-]*:\/\/\S*/gi;
-const HOST_TEXT = /\b[a-z0-9-]+(?:\.[a-z0-9-]+)+\b/gi;
 const HTML_COMMENT = /<!--[\s\S]*?-->/g;
 const HTML_SCRIPT = /<script\b[^>]*>[\s\S]*?<\/script\s*>/gi;
 const HTML_STYLE = /<style\b[^>]*>[\s\S]*?<\/style\s*>/gi;
@@ -428,17 +415,6 @@ function runLine(run) {
   return `${jsText(field('name'))} ${jsText(field('status'))} ${conclusion} ${jsText(field('html_url'))}`;
 }
 
-function textCode(text) {
-  const message = text.replace(URL_TEXT, ' ').replace(HOST_TEXT, ' ');
-  const named = TRANSIENT_CODE_NAMES.find((code) => message.includes(code));
-  if (named !== undefined) return named;
-  for (const [pattern, kind] of TRANSIENT_TEXT) {
-    if (pattern.test(message)) return kind;
-  }
-  const status = STATUS_TEXT.exec(message);
-  return status === null ? undefined : `HTTP-${status[1]}`;
-}
-
 async function ciStatusCall(args, host) {
   const scope = await repoScope(args, host);
   if (scope.error !== undefined) return scope.error;
@@ -468,8 +444,8 @@ async function ciStatusCall(args, host) {
       error: api.error ?? `gh api exited ${api.exitCode}`,
       output: api.output.trim(),
     };
-    const code = textCode(`${api.error ?? ''}\n${api.output}`);
-    if (code !== undefined) result.code = code;
+    const code = errorType(`${api.error ?? ''}\n${api.output}`);
+    if (code !== null) result.code = code;
     return result;
   }
 

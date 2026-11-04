@@ -72,7 +72,7 @@ export const verbs = [
     description: DESC_JOB_START,
     schema: SCHEMA_JOB_START,
     lock() {
-      return { mode: 'write' };
+      return { mode: 'shell' };
     },
     async call(args, host) {
       const command = commandOf(args);
@@ -112,7 +112,7 @@ export const verbs = [
     description: DESC_JOB_STOP,
     schema: SCHEMA_JOB_STOP,
     lock() {
-      return { mode: 'write' };
+      return { mode: 'read' };
     },
     async call(args, host) {
       const job = jobNameOf(args);

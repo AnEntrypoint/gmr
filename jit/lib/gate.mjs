@@ -1,3 +1,6 @@
+import { skillsCheck } from './skills-check.mjs';
+import { wikiCheck } from './wiki-lint.mjs';
+
 const CARGO_TIMEOUT_MS = 600000;
 const LS_TIMEOUT_MS = 60000;
 const BINARY_PROBE = 8000;
@@ -42,7 +45,8 @@ export async function runGate(host, root, scope = null) {
     notCovered.push(`docs: no DESIGN.md in ${root}, so the docs check did not run`);
   }
   if (await isFile(host, `${root}/skills/gm/SKILL.md`)) {
-    notCovered.push(`skills, wiki: the JIT gate does not run the skill and wiki checks that the Rust gate runs, in ${root}`);
+    checks.push(await timed(host, 'skills', () => skillsCheck(host, root)));
+    checks.push(await timed(host, 'wiki', () => wikiCheck(host, root)));
   } else {
     notCovered.push(`skills, wiki: no skills/gm/SKILL.md in ${root}, so it is not a gm-new checkout and these checks did not run`);
   }
