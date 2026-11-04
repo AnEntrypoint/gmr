@@ -18,6 +18,7 @@ pub struct SkillFile {
     pub digest: String,
     pub size: u64,
     pub mime_type: &'static str,
+    pub modified: Option<String>,
 }
 
 pub struct Skill {
@@ -50,10 +51,13 @@ impl Skill {
         self.files
             .iter()
             .map(|f| {
-                if f.path == "SKILL.md" {
-                    json!({ "uri": f.uri, "name": self.field("name"), "description": self.field("description"), "mimeType": f.mime_type })
+                let is_skill_md = f.path == "SKILL.md";
+                let priority = if is_skill_md { 1.0 } else { 0.5 };
+                let annotations = json!({ "audience": ["assistant"], "priority": priority, "lastModified": f.modified });
+                if is_skill_md {
+                    json!({ "uri": f.uri, "name": self.field("name"), "description": self.field("description"), "mimeType": f.mime_type, "annotations": annotations })
                 } else {
-                    json!({ "uri": f.uri, "name": f.path, "mimeType": f.mime_type })
+                    json!({ "uri": f.uri, "name": f.path, "mimeType": f.mime_type, "annotations": annotations })
                 }
             })
             .collect()
@@ -197,7 +201,8 @@ fn read_skill(name: &str) -> Result<Skill, String> {
     let mut files = Vec::with_capacity(paths.len());
     let mut skill_md: Option<String> = None;
     for path in paths {
-        let bytes = std::fs::read(dir.join(&path)).map_err(|e| format!("skills/{name}/{path}: {e}"))?;
+        let file = dir.join(&path);
+        let bytes = std::fs::read(&file).map_err(|e| format!("skills/{name}/{path}: {e}"))?;
         if path == "SKILL.md" {
             skill_md = Some(String::from_utf8_lossy(&bytes).into_owned());
         }
@@ -206,6 +211,7 @@ fn read_skill(name: &str) -> Result<Skill, String> {
             digest: format!("sha256:{}", sha256_hex(&bytes)),
             size: bytes.len() as u64,
             mime_type: mime_of(&path),
+            modified: crate::resources::modified_at(&file),
             path,
         });
     }

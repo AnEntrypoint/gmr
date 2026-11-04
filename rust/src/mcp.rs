@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
@@ -11,6 +11,8 @@ use tokio::sync::{mpsc, watch, Semaphore};
 use crate::exec::Jobs;
 use crate::locks::Locks;
 use crate::mcp_client::Hub;
+use crate::notices::Notices;
+use crate::resources::{self, Subscriptions};
 use crate::run::Run;
 use crate::runcode::{DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS};
 use crate::skills;
@@ -18,7 +20,10 @@ use crate::types::{Ctx, WorkerOpts};
 
 pub const SUPPORTED_VERSIONS: [&str; 2] = ["2025-11-25", "2025-06-18"];
 pub const RUN_META: &str = "com.anentrypoint.gmnew/run";
+pub const RUN_SEQ: &str = "com.anentrypoint.gmnew/seq";
 pub const SERVER_NAME: &str = "gm";
+const SERVER_TITLE: &str = "gm-new run worker";
+const SERVER_VERSION: &str = "0.1.0";
 pub const LOGGED_REPLY_CHARS: usize = 1000;
 pub const READ_ONLY_TOOLS: &[&str] = &[
     "next_context", "read_file", "list_dir", "stat_file", "search", "wiki_search", "grep", "callers", "impact", "query_log", "job_status",
@@ -35,6 +40,7 @@ const REPLY_MEMORY: usize = 256;
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(10);
 
 const CODE_INSTRUCTIONS: &str = "One tool does the work: run_code. Its body is JavaScript in the project, and each verb is a function on gm, for example await gm.read_file({ path }). The verb list is in run_code's description, gm.verbs() returns each verb's details, and finish ends the run and is not a verb. Start each step with next_context.";
+const RESOURCES_POINTER: &str = "Resources: skill://<name>/<file> reads a served skill file. run://<run>/log reads a run's event log, and run://<run>/witness its witness; resources/templates/list names the templates. Subscribe to a skill file with resources/subscribe to be told when it changes on disk. Log messages follow logging/setLevel, and completion/complete suggests skill names and run ids.";
 const SKILL_POINTER: &str = "The gm skill holds the rules of a run, the routes for pending events, and the way to hand work to a child session. Read it when a run starts, and read it again after a compaction. Read skill://gm/SKILL.md with ReadMcpResourceTool (server gm), or run the gm prompt (mcp__gm__gm). The host's Skill tool does not list it, so do not call it with the Skill tool. The gm-continue skill plans the open rows of gm-new and hands them to the gm skill. Read skill://gm-continue/SKILL.md with ReadMcpResourceTool (server gm), or run the gm-continue prompt (mcp__gm__gm-continue). The host's Skill tool does not list it, so do not call it with the Skill tool.";
 
 const NEXT_CONTEXT_DESCRIPTION: &str = "Begin a step. Returns rules, task, witness requirement, the events new since the last step in full, the older ones in compact form within two horizons, and prefixSha. pending lists the events that need you since your last step, each once, with an id. Delivery clears an event, so no later step or wait lists it again. Call it at the start of each step. query_log reaches every event. waitMs, when set, holds this call until an event is pending or that many milliseconds pass, at most 300000. child: true makes the call a read by a subagent on this connection: it takes no step, claims no pending event, and its reply has role child and the owning run. run, with child, names that owning run, and another run is refused.";
@@ -48,13 +54,15 @@ pub fn capabilities() -> Value {
     json!({
         "tools": { "listChanged": true },
         "prompts": { "listChanged": true },
-        "resources": { "listChanged": true },
+        "resources": { "listChanged": true, "subscribe": true },
+        "logging": {},
+        "completions": {},
         "extensions": { "io.modelcontextprotocol/skills": {} }
     })
 }
 
 pub fn instructions() -> String {
-    format!("{CODE_INSTRUCTIONS}\n\n{SKILL_POINTER}")
+    format!("{CODE_INSTRUCTIONS}\n\n{RESOURCES_POINTER}\n\n{SKILL_POINTER}")
 }
 
 pub fn is_read_only(tool: &str) -> bool {
@@ -185,7 +193,7 @@ struct Session {
     step_calls: u64,
     ended: Option<&'static str>,
     step_limited: bool,
-    rules: BTreeMap<u8, String>,
+    rules: Vec<(u8, String)>,
     gm_loads: u64,
     task_set: bool,
     ended_task: Option<String>,
@@ -197,12 +205,15 @@ struct Server {
     task: Option<String>,
     ctx: RwLock<Arc<Ctx>>,
     session: Mutex<Session>,
+    notices: Arc<Notices>,
+    subscriptions: Arc<Subscriptions>,
     out: mpsc::UnboundedSender<Option<String>>,
     ready: watch::Receiver<bool>,
     slots: Arc<Semaphore>,
     max_inflight: usize,
     replies: Mutex<Replies>,
     inflight: Mutex<HashMap<String, String>>,
+    actions: Mutex<HashMap<String, u64>>,
 }
 
 struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
@@ -219,7 +230,7 @@ fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-fn js_text(value: Option<&Value>) -> String {
+pub fn js_text(value: Option<&Value>) -> String {
     match value {
         None => "undefined".to_string(),
         Some(Value::String(s)) => s.clone(),
@@ -372,8 +383,15 @@ impl Server {
                 json!({ "prompts": prompts })
             }
             "prompts/get" => self.get_prompt(&params)?,
-            "resources/list" => json!({ "resources": skills::list().map_err(internal)? }),
+            "resources/list" => json!({ "resources": self.resource_list().map_err(internal)? }),
             "resources/read" => self.read_resource(&params)?,
+            "resources/subscribe" => self.subscribe(&params)?,
+            "resources/unsubscribe" => {
+                self.subscriptions.unsubscribe(params.get("uri").and_then(Value::as_str).unwrap_or_default());
+                json!({})
+            }
+            "completion/complete" => resources::completion(&params, &self.workspace.join("runs")),
+            "logging/setLevel" => self.notices.set_level(&params).map_err(|e| RpcErr::new(-32602, e))?,
             "skills/list" => json!({ "resultType": "complete", "skills": skills::entries().map_err(internal)? }),
             "skills/get" => {
                 let uri = params.get("uri");
@@ -383,7 +401,7 @@ impl Server {
                     None => return Err(RpcErr::new(-32602, format!("unknown skill: {}", js_text(uri)))),
                 }
             }
-            "resources/templates/list" => json!({ "resourceTemplates": [] }),
+            "resources/templates/list" => json!({ "resourceTemplates": resources::templates() }),
             "core/reload" => json!({ "ok": true, "generation": 0, "reloaded": [] }),
             "notifications/cancelled" => {
                 self.cancel(params.get("requestId").cloned().unwrap_or(Value::Null));
@@ -424,7 +442,7 @@ impl Server {
         let given = params.pointer("/arguments/task").and_then(Value::as_str).map(str::trim).unwrap_or("");
         {
             let mut s = lock(&self.session);
-            let cleared: Vec<u8> = s.rules.keys().copied().collect();
+            let cleared: Vec<u8> = s.rules.iter().map(|(rule, _)| *rule).collect();
             ctx.run.event("skill-loaded", json!({ "via": "prompt", "skill": "gm", "cleared": cleared }));
             clear_rules(&mut s, &ctx.run);
             if !given.is_empty() && s.ended.is_some() {
@@ -437,7 +455,28 @@ impl Server {
         Ok(result(if given.is_empty() { skill.body.clone() } else { format!("{}\n\nTask: {given}", skill.body) }))
     }
 
+    fn resource_list(&self) -> Result<Vec<Value>, String> {
+        let ctx = self.ctx();
+        let mut list = skills::list()?;
+        list.extend(resources::run_resources(&ctx.run.dir.join(crate::log::LOG_FILE), &ctx.run.id));
+        Ok(list)
+    }
+
+    fn subscribe(&self, params: &Value) -> Result<Value, RpcErr> {
+        let uri = params.get("uri").and_then(Value::as_str);
+        match uri.and_then(resources::digest_of) {
+            Some(digest) => {
+                self.subscriptions.subscribe(uri.unwrap_or_default(), digest);
+                Ok(json!({}))
+            }
+            None => Err(RpcErr { code: -32002, message: format!("resource not found: {}", js_text(params.get("uri"))), data: Some(json!({ "uri": params.get("uri") })) }),
+        }
+    }
+
     fn read_resource(&self, params: &Value) -> Result<Value, RpcErr> {
+        if let Some(run) = resources::read_run(&self.workspace.join("runs"), params.get("uri").and_then(Value::as_str).unwrap_or_default()) {
+            return Ok(json!({ "contents": [run] }));
+        }
         let uri = params.get("uri");
         let Some((skill, text, mime)) = uri.and_then(Value::as_str).and_then(skills::file_of) else {
             let shown = js_text(uri);
@@ -448,7 +487,7 @@ impl Server {
         let ctx = self.ctx();
         {
             let mut s = lock(&self.session);
-            let cleared: Vec<u8> = if is_gm { s.rules.keys().copied().collect() } else { Vec::new() };
+            let cleared: Vec<u8> = if is_gm { s.rules.iter().map(|(rule, _)| *rule).collect() } else { Vec::new() };
             ctx.run.event("skill-loaded", json!({ "via": "resource", "skill": skill.name, "uri": uri, "cleared": cleared }));
             if is_gm {
                 s.gm_loads = skills::gm_loads();
@@ -500,7 +539,12 @@ impl Server {
             obj.insert("rulesNotice".into(), Value::String(notice));
         }
         let is_error = !is_ok(&out);
-        Ok(json!({ "content": [{ "type": "text", "text": out.to_string() }], "structuredContent": out, "isError": is_error, "_meta": { RUN_META: run_id } }))
+        let mut meta = Map::new();
+        meta.insert(RUN_META.into(), Value::String(run_id));
+        if let Some(seq) = lock(&self.actions).remove(&key) {
+            meta.insert(RUN_SEQ.into(), json!(seq));
+        }
+        Ok(json!({ "content": [{ "type": "text", "text": out.to_string() }], "structuredContent": out, "isError": is_error, "_meta": meta }))
     }
 
     fn progress_for(&self, name: &str, token: Option<&Value>) -> AbortOnDrop {
@@ -531,6 +575,7 @@ impl Server {
             s.ended_task.clone().or_else(|| self.task.clone()).or_else(|| Some(old.run.task()).filter(|t| !t.is_empty()))
         };
         let run = Arc::new(Run::open(&self.workspace, None, task.as_deref())?);
+        self.notices.hosted(&run);
         old.jobs.set_dir(run.dir.clone());
         old.hub.attach(run.clone());
         log_tools(&run, &old.hub);
@@ -700,6 +745,7 @@ impl Server {
         let started = Instant::now();
         ctx.run.enter();
         let action = ctx.run.event("action", action_fields(step, tool, args, rpc_id, trace));
+        lock(&self.actions).insert(rpc_id.to_string(), action);
         let mut result = work.await;
         ctx.run.leave();
         if tool == "run_code" {
@@ -730,6 +776,7 @@ impl Server {
     fn refuse(&self, ctx: &Arc<Ctx>, tool: &str, args: Value, reason: &str, rpc_id: &Value, trace: &Map<String, Value>) -> Value {
         let step = lock(&self.session).steps;
         let action = ctx.run.event("action", action_fields(step, tool, args, rpc_id, trace));
+        lock(&self.actions).insert(rpc_id.to_string(), action);
         let error = format!("refused: {reason}");
         ctx.run.event("refusal", json!({ "step": step, "tool": tool, "error": error, "durMs": 0, "actionSeq": action }));
         json!({ "ok": false, "refused": true, "error": error, "actionSeq": action })
@@ -853,7 +900,7 @@ fn initialize(params: &Value) -> Value {
         "protocolVersion": version,
         "capabilities": capabilities(),
         "instructions": instructions(),
-        "serverInfo": { "name": SERVER_NAME, "version": env!("CARGO_PKG_VERSION") }
+        "serverInfo": { "name": SERVER_NAME, "title": SERVER_TITLE, "version": SERVER_VERSION }
     })
 }
 
@@ -868,18 +915,18 @@ fn prompt_of(name: &str) -> Result<Value, String> {
 }
 
 fn note_rule(s: &mut Session, run: &Run, rule: u8, evidence: String) {
-    if s.rules.contains_key(&rule) {
+    if s.rules.iter().any(|(known, _)| *known == rule) {
         return;
     }
     run.event("rules-notice", json!({ "step": s.steps, "rule": rule, "evidence": evidence }));
-    s.rules.insert(rule, evidence);
+    s.rules.push((rule, evidence));
 }
 
 fn clear_rules(s: &mut Session, run: &Run) {
     if s.rules.is_empty() {
         return;
     }
-    let rules: Vec<u8> = s.rules.keys().copied().collect();
+    let rules: Vec<u8> = s.rules.iter().map(|(rule, _)| *rule).collect();
     s.rules.clear();
     run.event("rules-cleared", json!({ "step": s.steps, "rules": rules }));
 }
@@ -983,6 +1030,10 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
         return Err("--max-inflight must be a positive integer".into());
     }
     let run = Arc::new(Run::open(&workspace, opts.run_dir.as_deref(), opts.task.as_deref())?);
+    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Option<String>>();
+    let notices = Notices::new(out_tx.clone());
+    notices.hosted(&run);
+    let subscriptions = Subscriptions::new(out_tx.clone());
     let ctx = Arc::new(Ctx {
         workspace: workspace.clone(),
         run: run.clone(),
@@ -1008,7 +1059,6 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
         });
     }
 
-    let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Option<String>>();
     let writer = tokio::spawn(async move {
         let mut stdout = tokio::io::stdout();
         while let Some(Some(line)) = out_rx.recv().await {
@@ -1025,12 +1075,15 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
         task: opts.task.clone(),
         ctx: RwLock::new(ctx),
         session: Mutex::new(Session { task_set: opts.task.is_some(), gm_loads: skills::gm_loads(), ..Session::default() }),
+        notices,
+        subscriptions,
         out: out_tx,
         ready: ready_rx,
         slots: Arc::new(Semaphore::new(opts.max_inflight)),
         max_inflight: opts.max_inflight,
         replies: Mutex::new(Replies::default()),
         inflight: Mutex::new(HashMap::new()),
+        actions: Mutex::new(HashMap::new()),
     });
 
     let mut term = sigterm();

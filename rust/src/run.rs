@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Map, Value};
@@ -48,7 +48,10 @@ pub struct Run {
     recovery: Mutex<Option<Value>>,
     delivered: Mutex<Vec<PathBuf>>,
     notify: tokio::sync::Notify,
+    sink: Mutex<Option<Sink>>,
 }
+
+pub type Sink = Arc<dyn Fn(&str, u64, &Value) + Send + Sync>;
 
 pub fn new_run_id() -> String {
     let iso = log::iso_now();
@@ -229,6 +232,7 @@ impl Run {
             recovery: Mutex::new(None),
             delivered: Mutex::new(Vec::new()),
             notify: tokio::sync::Notify::new(),
+            sink: Mutex::new(None),
         }
     }
 
@@ -300,7 +304,15 @@ impl Run {
             }
             self.notify.notify_waiters();
         }
+        let sink = self.sink.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        if let Some(sink) = sink {
+            sink(kind, seq, &fields);
+        }
         seq
+    }
+
+    pub fn set_sink(&self, sink: Sink) {
+        *self.sink.lock().unwrap_or_else(|p| p.into_inner()) = Some(sink);
     }
 
     pub fn count(&self) -> u64 {
