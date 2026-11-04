@@ -1084,15 +1084,17 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
 
     let mut term = sigterm();
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let mut handlers = tokio::task::JoinSet::new();
     let reason = loop {
         tokio::select! {
+            Some(_) = handlers.join_next(), if !handlers.is_empty() => {}
             line = lines.next_line() => match line {
                 Ok(Some(line)) => {
                     if line.trim().is_empty() {
                         continue;
                     }
                     let server = server.clone();
-                    tokio::spawn(async move {
+                    handlers.spawn(async move {
                         if let Some(reply) = server.handle_line(line).await {
                             server.send(reply);
                         }
@@ -1107,6 +1109,7 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
             _ = term.recv() => break "SIGTERM from the supervisor",
         }
     };
+    let _ = tokio::time::timeout(Duration::from_secs(10), async { while handlers.join_next().await.is_some() {} }).await;
     server.shutdown(reason).await;
     let _ = server.out.send(None);
     let _ = tokio::time::timeout(Duration::from_secs(2), writer).await;
