@@ -1109,7 +1109,7 @@ pub async fn serve_stdio(opts: WorkerOpts) -> Result<(), String> {
             _ = term.recv() => break "SIGTERM from the supervisor",
         }
     };
-    let _ = tokio::time::timeout(Duration::from_secs(10), async { while handlers.join_next().await.is_some() {} }).await;
+    let _ = tokio::time::timeout(Duration::from_secs(30), async { while handlers.join_next().await.is_some() {} }).await;
     server.shutdown(reason).await;
     let _ = server.out.send(None);
     let _ = tokio::time::timeout(Duration::from_secs(2), writer).await;
