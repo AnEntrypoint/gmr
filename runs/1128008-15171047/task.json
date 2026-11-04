@@ -1,0 +1,10 @@
+{
+  "id": "1128008-15171047",
+  "mode": "mcp",
+  "task": "",
+  "witness": "Finish only with a witness: one string that states the evidence (command output, file content or query result) showing the task is done.",
+  "workspace": "/workspace/gmr",
+  "maxSteps": 50,
+  "maxInflight": 8,
+  "createdAt": "2026-11-04T08:23:52.959Z"
+}

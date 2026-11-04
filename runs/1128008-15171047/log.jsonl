@@ -1,0 +1,5 @@
+{"seq":1,"t":"2026-11-04T08:23:52.961Z","mono":163.371,"inFlight":0,"kind":"start","mode":"mcp","maxSteps":50,"maxInflight":8,"taskFrom":"session prompt"}
+{"seq":2,"t":"2026-11-04T08:23:53.601Z","mono":804.135,"inFlight":0,"kind":"mcp-server","server":"playwriter","state":"connected","tools":2,"protocolVersion":"2025-11-25"}
+{"seq":3,"t":"2026-11-04T08:23:53.602Z","mono":804.377,"inFlight":0,"kind":"gitignore","server":"playwriter","state":"skipped","reason":"the workspace is not a git repository","ignore":[".playwriter/"]}
+{"seq":4,"t":"2026-11-04T08:23:53.602Z","mono":804.866,"inFlight":0,"kind":"mcp-tool-skipped","server":"playwriter","tool":"reset","verb":"playwriter_reset","reason":"the server entry denies it"}
+{"seq":5,"t":"2026-11-04T08:23:53.603Z","mono":805.868,"inFlight":0,"kind":"tools","sha":"cc60d9fa9ee4dfbd166ebd03e05a68b82cc903d6799b00b3ed07d7821fe1ed54","count":3}

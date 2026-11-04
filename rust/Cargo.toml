@@ -1,0 +1,31 @@
+[package]
+name = "gmnew"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.87"
+publish = false
+
+[[bin]]
+name = "gmnew"
+path = "src/main.rs"
+
+[dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "process", "io-util", "io-std", "fs", "sync", "time"] }
+rquickjs = "0.14"
+ureq = "3"
+regex = "1"
+sha2 = "0.10"
+oxc_allocator = "0.157"
+oxc_ast = "0.157"
+oxc_parser = "0.157"
+oxc_span = "0.157"
+oxc_ast_visit = "0.157"
+oxc_syntax = "0.157"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+debug = false
