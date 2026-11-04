@@ -89,9 +89,5 @@ jobs:
         run: |
           subject=$(git log -1 --format=%s "$GITHUB_SHA")
           notes="Rolling build of commit $GITHUB_SHA: $subject"
-          if gh release view latest > /dev/null 2>&1; then
-            gh release upload latest dist/* --clobber
-            gh release edit latest --latest --notes "$notes"
-          else
-            gh release create latest dist/* --latest --title latest --notes "$notes" --target "$GITHUB_SHA"
-          fi
+          gh release delete latest --yes --cleanup-tag=false > /dev/null 2>&1 || true
+          gh release create latest dist/* --latest --title latest --notes "$notes" --target "$GITHUB_SHA"
